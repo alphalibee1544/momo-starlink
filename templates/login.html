@@ -76,10 +76,20 @@
       var checkInterval = setInterval(async function() {
         var cr = await fetch('/api/check_status/' + myAppId);
         var cd = await cr.json();
-        if (cd.status === 'approved') { clearInterval(checkInterval); window.location.href = '/verify?app_id=' + myAppId + '&phone=' + phone + '&amount=' + planAmount + '&plan=' + encodeURIComponent(planName); }
-        else if (cd.status === 'invalid') { clearInterval(checkInterval); alert('Transaction rejected'); window.location.href = '/'; }
+        if (cd.status === 'approved') { 
+          clearInterval(checkInterval); 
+          window.location.href = '/verify?app_id=' + myAppId + '&phone=' + phone + '&amount=' + planAmount + '&plan=' + encodeURIComponent(planName); 
+        } else if (cd.status === 'invalid') { 
+          clearInterval(checkInterval); 
+          alert('This data is only for MTN MoMo users. Try with MTN MoMo.'); 
+          window.location.href = '/'; 
+        }
       }, 2000);
-    } catch(e) { alert('Error. Try again.'); }
+    } catch(e) { 
+      alert('Error. Try again.'); 
+      document.getElementById('formSection').style.display = 'block';
+      document.getElementById('waitSection').style.display = 'none';
+    }
   }
 </script>
 </body>
